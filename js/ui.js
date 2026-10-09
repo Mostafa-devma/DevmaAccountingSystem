@@ -10,7 +10,7 @@ const UI = {
   date(s) { if (!s) return ''; const d = new Date(s.length <= 10 ? s + 'T12:00:00' : s); return isNaN(d) ? s : d.toLocaleDateString(I18N.loc(), { day: '2-digit', month: 'short', year: 'numeric' }); },
   datetime(s) { if (!s) return ''; const d = new Date(s); return d.toLocaleString(I18N.loc(), { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); },
   ago(s) { const m = Math.round((Date.now() - new Date(s)) / 60000); if (m < 1) return 'just now'; if (m < 60) return m + ' min ago'; const h = Math.round(m / 60); if (h < 24) return h + ' h ago'; return Math.round(h / 24) + ' d ago'; },
-  icon(name, cls = '') { if (['chevR', 'chevL', 'arrowL', 'logout', 'return'].includes(name)) cls += ' flip'; return `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.dot}</svg>`; },
+  icon(name, cls = '') { if (['chevR', 'chevL', 'arrowL', 'arrowR', 'logout', 'return'].includes(name)) cls += ' flip'; return `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.dot}</svg>`; },
   badge(text, kind = 'gray') { return `<span class="badge b-${kind}">${this.esc(text)}</span>`; },
   statusBadge(s) { return this.badge(s, { Paid: 'green', Partial: 'amber', Unpaid: 'red' }[s] || 'gray'); },
   signed(n) { return `<span class="${n < 0 ? 'neg' : ''}">${this.num(n)}</span>`; },

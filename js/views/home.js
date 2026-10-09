@@ -7,7 +7,6 @@ V.dashboard = el => {
   const todayS = U.sum(sales.filter(i => i.date === T), baseTot), monthS = U.sum(sales.filter(i => i.date >= ms), baseTot);
   const tt = Eng.totals(), cash = U.sum(Eng.cashAccounts(), a => Eng.balance(a.id, { totals: tt }));
   const ar = Eng.balance('acc_ar', { totals: tt }), ap = -Eng.balance('acc_ap', { totals: tt }), low = Eng.lowStock().length;
-  const occ = d.rooms.filter(r => r.status === 'occupied').length;
   const h = new Date().getHours(), greet = h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
   const rl = p => can('reports') ? p : '';
   const days = [...Array(7)].map((_, i) => U.addDays(T, i - 6));
@@ -23,10 +22,9 @@ V.dashboard = el => {
     ${!can('cashbox') ? '' : UI.kpi('Cash & bank', UI.money(cash), { icon: 'wallet', tone: 't3', link: can('cashbox') ? 'cashbox' : '' })}
     ${can('accounts') || can('reports') ? UI.kpi('Receivables', UI.money(ar), { icon: 'users', tone: 't4', link: rl('report/customer_balances') }) + UI.kpi('Payables', UI.money(ap), { icon: 'truck', tone: 't5', link: rl('report/supplier_balances') }) : ''}
     ${UI.kpi('Low stock', low + ' item(s)', { icon: 'alert', tone: low ? 'warn' : 't6', link: rl('report/lowstock') })}
-    ${UI.kpi('Rooms occupied', `${occ} / ${d.rooms.length}`, { icon: 'bed', tone: 't2', link: can('rooms') ? 'rooms' : '' })}
   </div>
   <div class="tiles">${MODULES.map(m => `<a class="tile ${m.hue} ${can(m.key) ? '' : 'locked'}" href="#/${m.path}" data-k="${m.key}" title="${m.label}">
-      <span class="tile-ic">${UI.icon(m.icon)}</span><span class="tile-l">${m.label}</span>${can(m.key) ? '' : `<span class="tile-lock">${UI.icon('lock')}</span>`}</a>`).join('')}</div>
+      <span class="tile-ic">${ILLUS[m.key] ? `<svg viewBox="0 0 64 64" aria-hidden="true">${ILLUS[m.key]}</svg>` : UI.icon(m.icon)}</span><span class="tile-l">${m.label}</span>${can(m.key) ? '' : `<span class="tile-lock">${UI.icon('lock')}</span>`}</a>`).join('')}</div>
   <div class="grid g2 mt">
     <div class="card"><div class="card-head"><h3>${UI.icon('chart')}Sales — last 7 days</h3>${can('reports') ? '<a href="#/report/sales_daily" class="link">Full report →</a>' : ''}</div>
       <div class="card-body">${UI.bars(days.map(x => ({ label: new Date(x + 'T12:00').toLocaleDateString(I18N.loc(), { weekday: 'short', day: 'numeric' }), value: U.r(U.sum(sales.filter(i => i.date === x), baseTot)), link: rl(`report/sales_daily?from=${x}&to=${x}`) })), v => UI.num(v, 0))}</div></div>
@@ -44,7 +42,7 @@ V.about = el => {
     <div class="card about-card"><div class="card-body">
       <div class="about-logo">${UI.logoSvg(84)}<div><div class="about-name"><b>Devma</b> Accounting System</div><div class="muted">Version 1.0 · ERP edition</div></div></div>
       <p>Devma is a complete point-of-sale, inventory and double-entry accounting system. Every sale, purchase, voucher and stock movement posts automatically to the general ledger, so the trial balance, account statements and financial reports are always up to date.</p>
-      <ul class="feature-list">${['Point of sale with hold/recall, barcode entry and multi-currency tender', 'Rooms / tables board with check-in, room service and checkout billing', 'Sales, purchases and returns with partial payments', 'Receipt, payment and journal vouchers', 'Warehouses, transfers, stock counts, waste and opening stock', 'Production recipes (bill of materials) and disassembling', 'Trial balance, account statements, P&L, balance sheet and 16 reports', 'Users with role permissions, audit log, backups and automated tasks'].map(x => `<li>${UI.icon('check')}${x}</li>`).join('')}</ul>
+      <ul class="feature-list">${['Point of sale with hold/recall, barcode entry and multi-currency tender', 'Sales, purchases and returns with partial payments', 'Receipt, payment and journal vouchers', 'Warehouses, transfers, stock counts, waste and opening stock', 'Trial balance, account statements, P&L, balance sheet and 16 reports', 'Users with role permissions, audit log, backups and automated tasks'].map(x => `<li>${UI.icon('check')}${x}</li>`).join('')}</ul>
     </div></div>
     <div class="stack">
       <div class="card"><div class="card-head"><h3>${UI.icon('database')}Your data</h3></div><div class="card-body"><div class="stats">

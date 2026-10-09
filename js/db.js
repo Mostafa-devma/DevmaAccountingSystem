@@ -1,7 +1,7 @@
 /* Devma Accounting System — data store, accounting & stock engine, demo seed */
 'use strict';
-const DB_KEY = 'devma_db_v1';
-const SNAP_KEY = 'devma_snapshots_v1';
+const DB_KEY = 'devma_db_v2';
+const SNAP_KEY = 'devma_snapshots_v2';
 
 /* ---------------- Utilities ---------------- */
 const U = {
@@ -23,18 +23,25 @@ const Store = {
   data: null,
   load() {
     try { const raw = localStorage.getItem(DB_KEY); this.data = raw ? JSON.parse(raw) : null; } catch (e) { this.data = null; }
-    if (!this.data || !this.data.version) { Seed.demo(); this.save(); }
+    if (!this.data || !this.data.version) { Seed.fresh(); this.save(); }
     this.migrate();
     return this.data;
   },
   migrate() {
     const b = Seed.blank();
+    const d = this.data;
+    delete d.rooms; delete d.stays;
+    const used = id => d.invoices.some(i => i.lines.some(l => l.itemId === id)) || d.stockMoves.some(m => m.itemId === id);
+    d.items = d.items.filter(i => i.sys !== 'room_charge' || used(i.id));
+    if (!d.journal.some(j => j.lines.some(l => l.accountId === 'acc_room_rev'))) d.accounts = d.accounts.filter(a => a.id !== 'acc_room_rev');
+    d.users.forEach(u => { if (Array.isArray(u.perms)) u.perms = u.perms.filter(p => !['rooms', 'production', 'disassembly'].includes(p)); });
+    ['recipes', 'productions', 'disassemblies'].forEach(k => { if (Array.isArray(d[k]) && !d[k].length) delete d[k]; });
     for (const k in b) if (this.data[k] === undefined) this.data[k] = b[k];
     for (const k in b.settings) if (this.data.settings[k] === undefined) this.data.settings[k] = b.settings[k];
   },
   save() {
     try { localStorage.setItem(DB_KEY, JSON.stringify(this.data)); return true; }
-    catch (e) { console.error(e); if (window.UI) UI.toast('Browser storage is full — download a backup and delete old snapshots.', 'error'); return false; }
+    catch (e) { console.error(e); if (typeof UI !== 'undefined') UI.toast('Browser storage is full — download a backup and delete old snapshots.', 'error'); return false; }
   },
   replace(data) { this.data = data; this.migrate(); this.save(); },
 };
@@ -62,7 +69,7 @@ const Eng = {
   item(id) { return db().items.find(x => x.id === id); },
   account(id) { return db().accounts.find(x => x.id === id); },
   get(coll, id) { return (db()[coll] || []).find(x => x.id === id); },
-  user() { return (window.App && App.user) ? App.user.username : 'system'; },
+  user() { return (typeof App !== 'undefined' && App.user) ? App.user.username : 'system'; },
   nextNo(key, prefix, pad = 5) { const c = db().counters; c[key] = (c[key] || 0) + 1; return prefix + String(c[key]).padStart(pad, '0'); },
   audit(action, detail) {
     const d = db(); d.audit.unshift({ id: U.uid('log'), date: U.now(), user: this.user(), action, detail });
@@ -377,96 +384,6 @@ const Eng = {
     });
   },
 
-  /* ---------- Production ---------- */
-  produce(src) {
-    return this.tx(() => {
-      const p = U.clone(src), r = this.get('recipes', p.recipeId);
-      if (!r) throw new Error('Choose a recipe.');
-      if (!(+p.batches > 0)) throw new Error('Batches must be greater than zero.');
-      if (!p.warehouseId) throw new Error('Choose a warehouse.');
-      p.id = U.uid('prd'); p.no = this.nextNo('prd', 'PRD-'); p.created = U.now(); p.createdBy = this.user();
-      p.consumed = []; let total = 0;
-      r.components.forEach(c => {
-        const it = this.item(c.itemId), q = +c.qty * +p.batches, uc = +it.cost || 0;
-        this.move({ date: p.date, itemId: it.id, warehouseId: p.warehouseId, qty: -q, cost: uc, type: 'production_in', refType: 'production', refId: p.id, ref: p.no });
-        p.consumed.push({ itemId: it.id, qty: q, cost: uc }); total += q * uc;
-      });
-      total += (+r.extraCost || 0) * +p.batches;
-      const fin = this.item(r.itemId), outQ = +r.outputQty * +p.batches, unit = outQ ? total / outQ : 0;
-      this.avgCost(fin, outQ, unit);
-      this.move({ date: p.date, itemId: fin.id, warehouseId: p.warehouseId, qty: outQ, cost: unit, type: 'production_out', refType: 'production', refId: p.id, ref: p.no });
-      p.output = { itemId: fin.id, qty: outQ, unitCost: U.r(unit, 4), total: U.r(total) };
-      const extra = (+r.extraCost || 0) * +p.batches;
-      if (extra) this.post({ date: p.date, memo: 'Production overhead ' + p.no, refType: 'production', refId: p.id, ref: p.no, lines: [{ accountId: this.A('inventory'), debit: extra }, { accountId: this.A('salaries'), credit: extra }] });
-      db().productions.push(p);
-      this.audit('Produced', `${p.no}: ${outQ} × ${fin.name}`);
-      return p;
-    });
-  },
-  deleteProduction(id) {
-    return this.tx(() => {
-      const p = this.get('productions', id); if (!p) return;
-      this.unmove('production', id); this.unpost('production', id);
-      db().productions = db().productions.filter(x => x.id !== id);
-      if (!db().settings.allowNegative && this.qty(p.output.itemId, p.warehouseId) < -0.0001) throw new Error('Cannot undo: the produced items were already sold or moved.');
-      this.audit('Deleted', 'Production ' + p.no);
-    });
-  },
-
-  /* ---------- Disassembly ---------- */
-  disassemble(src) {
-    return this.tx(() => {
-      const x = U.clone(src);
-      x.outputs = (x.outputs || []).filter(o => o.itemId && +o.qty > 0);
-      if (!x.itemId) throw new Error('Choose the item to disassemble.');
-      if (!(+x.qty > 0)) throw new Error('Quantity must be greater than zero.');
-      if (!x.outputs.length) throw new Error('Add at least one output part.');
-      if (x.outputs.some(o => o.itemId === x.itemId)) throw new Error('An output cannot be the same as the source item.');
-      const shares = U.r(U.sum(x.outputs, o => o.share));
-      if (Math.abs(shares - 100) > 0.01) throw new Error(`Cost shares must add up to 100% (now ${shares}%).`);
-      x.id = U.uid('dis'); x.no = this.nextNo('dis', 'DIS-'); x.created = U.now(); x.createdBy = this.user();
-      const src_ = this.item(x.itemId), uc = +src_.cost || 0, total = uc * +x.qty;
-      this.move({ date: x.date, itemId: src_.id, warehouseId: x.warehouseId, qty: -(+x.qty), cost: uc, type: 'disassembly_in', refType: 'disassembly', refId: x.id, ref: x.no });
-      x.outputs.forEach(o => {
-        const it = this.item(o.itemId), part = total * (+o.share) / 100, unit = part / +o.qty;
-        o.unitCost = U.r(unit, 4); this.avgCost(it, +o.qty, unit);
-        this.move({ date: x.date, itemId: it.id, warehouseId: x.warehouseId, qty: +o.qty, cost: unit, type: 'disassembly_out', refType: 'disassembly', refId: x.id, ref: x.no });
-      });
-      x.totalCost = U.r(total);
-      db().disassemblies.push(x);
-      this.audit('Disassembled', `${x.no}: ${x.qty} × ${src_.name}`);
-      return x;
-    });
-  },
-  deleteDisassembly(id) {
-    return this.tx(() => {
-      const x = this.get('disassemblies', id); if (!x) return;
-      this.unmove('disassembly', id); db().disassemblies = db().disassemblies.filter(y => y.id !== id);
-      if (!db().settings.allowNegative) x.outputs.forEach(o => { if (this.qty(o.itemId, x.warehouseId) < -0.0001) throw new Error('Cannot undo: some output parts were already used.'); });
-      this.audit('Deleted', 'Disassembly ' + x.no);
-    });
-  },
-
-  /* ---------- Rooms ---------- */
-  checkout(stayId, opt) {
-    return this.tx(() => {
-      const d = db(), stay = this.get('stays', stayId), room = this.get('rooms', stay.roomId);
-      const roomItem = d.items.find(i => i.sys === 'room_charge');
-      const lines = [];
-      if (+opt.nights > 0) lines.push({ itemId: roomItem.id, qty: +opt.nights, price: +room.rate, disc: 0 });
-      stay.orders.forEach(o => lines.push({ itemId: o.itemId, qty: o.qty, price: o.price, disc: 0 }));
-      if (!lines.length) throw new Error('Nothing to bill — add nights or orders.');
-      const inv = this.saveInvoice({ type: 'sale', date: U.today(), accountId: opt.accountId, warehouseId: this.defWh(), currency: UI_base(), rate: 1,
-        taxRate: +opt.taxRate || 0, discount: +opt.discount || 0, paid: +opt.paid || 0, payAccountId: opt.payAccountId, salesmanId: opt.salesmanId || '',
-        notes: `Room ${room.name} — ${stay.guest} (${U.daysBetween(stay.checkIn, U.today()) || 1} night(s))`, source: 'room', stayId: stay.id, lines });
-      const s = this.get('stays', stayId);
-      s.status = 'closed'; s.checkOut = U.now(); s.invoiceId = inv.id;
-      this.get('rooms', room.id).status = 'cleaning';
-      this.audit('Check-out', `Room ${room.name} — ${stay.guest}`);
-      return inv;
-    });
-  },
-
   /* ---------- Cash shifts ---------- */
   closeShift(src) {
     return this.tx(() => {
@@ -521,16 +438,16 @@ function UI_base() { const c = db().currencies.find(x => x.base) || db().currenc
 /* ---------------- Seed ---------------- */
 const ROLE_PERMS = {
   admin: '*',
-  accountant: ['rooms', 'pos', 'converter', 'categories', 'currencies', 'vouchers', 'items', 'inventory', 'accounts', 'invoices', 'cashbox', 'salesman', 'stockmgmt', 'production', 'disassembly', 'trialbalance', 'statement', 'warehouses', 'waste', 'reports', 'tasks'],
-  cashier: ['rooms', 'pos', 'converter', 'items', 'inventory', 'invoices', 'cashbox'],
-  storekeeper: ['items', 'categories', 'warehouses', 'inventory', 'stockmgmt', 'waste', 'production', 'disassembly'],
+  accountant: ['pos', 'converter', 'categories', 'currencies', 'vouchers', 'items', 'inventory', 'accounts', 'invoices', 'cashbox', 'salesman', 'stockmgmt', 'trialbalance', 'statement', 'warehouses', 'waste', 'reports', 'tasks'],
+  cashier: ['pos', 'converter', 'items', 'inventory', 'invoices', 'cashbox'],
+  storekeeper: ['items', 'categories', 'warehouses', 'inventory', 'stockmgmt', 'waste'],
 };
 const Seed = {
   blank() {
     return {
       version: 1,
       settings: {
-        company: 'Devma Trading Co.', address: 'Hamra Street, Beirut, Lebanon', phone: '+961 1 234 567', email: 'info@devma.com', taxNo: 'VAT-1029384',
+        company: 'My Company', address: '', phone: '', email: '', taxNo: '',
         taxRate: 11, invoiceFooter: 'Thank you for your business!', theme: 'emerald', dark: false, decimals: 2, allowNegative: false,
         lowStockAlerts: true, defaultWarehouseId: null, defaultCashAccountId: 'acc_cash', walkInCustomerId: null, receiptWidth: 80,
       },
@@ -539,7 +456,7 @@ const Seed = {
       currencies: [{ id: 'cur_usd', code: 'USD', name: 'US Dollar', symbol: '$', rate: 1, decimals: 2, base: true }],
       categories: [], warehouses: [], items: [], stockMoves: [],
       accounts: this.coa(), journal: [], invoices: [], vouchers: [], salesmen: [],
-      rooms: [], stays: [], recipes: [], productions: [], disassemblies: [], transfers: [], adjustments: [],
+      transfers: [], adjustments: [],
       shifts: [], tasks: [], taskLog: [], notifications: [], audit: [], rateHistory: [], heldOrders: [], conversions: [],
     };
   },
@@ -549,12 +466,28 @@ const Seed = {
       ['1200', 'Accounts Receivable', 'asset', 'g_assets', 'ar', 1], ['1300', 'Inventory', 'asset', 'g_assets', 'inventory'], ['1400', 'VAT Receivable', 'asset', 'g_assets', 'vat_in'],
       ['2000', 'Liabilities', 'liability', null, 'g_liab', 1], ['2100', 'Accounts Payable', 'liability', 'g_liab', 'ap', 1], ['2200', 'VAT Payable', 'liability', 'g_liab', 'vat_out'],
       ['3000', 'Equity', 'equity', null, 'g_equity', 1], ['3100', 'Owner Capital', 'equity', 'g_equity', 'capital'], ['3200', 'Opening Balance Equity', 'equity', 'g_equity', 'opening'], ['3300', 'Retained Earnings', 'equity', 'g_equity', 'retained'],
-      ['4000', 'Revenue', 'revenue', null, 'g_rev', 1], ['4100', 'Sales Revenue', 'revenue', 'g_rev', 'sales'], ['4200', 'Sales Returns', 'revenue', 'g_rev', 'sales_ret'], ['4300', 'Room Revenue', 'revenue', 'g_rev', 'room_rev'], ['4400', 'Other Income', 'revenue', 'g_rev', 'other_inc'],
+      ['4000', 'Revenue', 'revenue', null, 'g_rev', 1], ['4100', 'Sales Revenue', 'revenue', 'g_rev', 'sales'], ['4200', 'Sales Returns', 'revenue', 'g_rev', 'sales_ret'], ['4400', 'Other Income', 'revenue', 'g_rev', 'other_inc'],
       ['5000', 'Expenses', 'expense', null, 'g_exp', 1], ['5100', 'Cost of Goods Sold', 'expense', 'g_exp', 'cogs'], ['5200', 'Waste & Spoilage', 'expense', 'g_exp', 'waste'], ['5300', 'Inventory Adjustments', 'expense', 'g_exp', 'adjust'],
       ['5400', 'Salaries & Wages', 'expense', 'g_exp', 'salaries'], ['5500', 'Rent', 'expense', 'g_exp', 'rent'], ['5600', 'Utilities', 'expense', 'g_exp', 'utilities'], ['5700', 'Salesman Commission', 'expense', 'g_exp', 'commission'],
       ['5800', 'General Expenses', 'expense', 'g_exp', 'general_exp'], ['5900', 'Cash Over / Short', 'expense', 'g_exp', 'cash_diff'],
     ];
     return rows.map(([code, name, type, parent, sys, group, kind]) => ({ id: 'acc_' + sys, code, name, type, parentId: parent ? 'acc_' + parent : null, sys, isGroup: !!group, kind: kind || 'general', active: true, system: true }));
+  },
+  /* a clean company: only what the system needs to work — no demo items, parties or transactions */
+  fresh() {
+    Store.data = this.blank();
+    const d = Store.data;
+    d.currencies.push({ id: 'cur_lbp', code: 'LBP', name: 'Lebanese Pound', symbol: 'LL', rate: 89500, decimals: 0 });
+    d.warehouses.push({ id: 'wh_main', name: 'Main Warehouse', location: '', keeper: '' });
+    d.settings.defaultWarehouseId = 'wh_main';
+    d.accounts.push({ id: 'acc_c_walkin', code: '1200-001', name: 'Walk-in Customer', type: 'asset', parentId: 'acc_ar', kind: 'customer', phone: '', email: '', address: '', creditLimit: 0, active: true });
+    d.settings.walkInCustomerId = 'acc_c_walkin';
+    d.tasks.push(
+      { id: 'tk_backup', name: 'Daily local backup', type: 'backup', frequency: 'daily', active: true, lastRun: null, config: {} },
+      { id: 'tk_low', name: 'Low stock check', type: 'lowstock', frequency: 'daily', active: true, lastRun: null, config: {} },
+    );
+    Eng.audit('System', 'New company created');
+    return d;
   },
   demo() {
     Store.data = this.blank();
@@ -565,7 +498,7 @@ const Seed = {
       d.currencies.push({ id: 'cur_lbp', code: 'LBP', name: 'Lebanese Pound', symbol: 'LL', rate: 89500, decimals: 0 }, { id: 'cur_eur', code: 'EUR', name: 'Euro', symbol: '€', rate: 0.92, decimals: 2 });
       d.warehouses.push({ id: 'wh_main', name: 'Main Warehouse', location: 'Industrial Zone, Dora', keeper: 'Fadi K.' }, { id: 'wh_shop', name: 'Shop Floor', location: 'Hamra Street', keeper: 'Maya R.' });
       d.settings.defaultWarehouseId = 'wh_main';
-      const cats = [['cat_bev', 'Beverages', '#0f766e'], ['cat_snk', 'Snacks', '#d97706'], ['cat_dry', 'Dairy', '#2563eb'], ['cat_bak', 'Bakery', '#b45309'], ['cat_cln', 'Cleaning', '#7c3aed'], ['cat_raw', 'Raw Materials', '#64748b'], ['cat_srv', 'Services', '#db2777']];
+      const cats = [['cat_bev', 'Beverages', '#0f766e'], ['cat_snk', 'Snacks', '#d97706'], ['cat_dry', 'Dairy', '#2563eb'], ['cat_bak', 'Bakery', '#b45309'], ['cat_cln', 'Cleaning', '#7c3aed'], ['cat_srv', 'Services', '#db2777']];
       cats.forEach(([id, name, color]) => d.categories.push({ id, name, color, parentId: null }));
       const mk = (id, code, name, cat, unit, cost, price, min, type = 'stock', extra = {}) => d.items.push(Object.assign({ id, code, barcode: '622' + code.replace(/\D/g, '').padStart(9, '0'), name, categoryId: cat, unit, cost, price, minQty: min, type, active: true, created: U.now() }, extra));
       mk('it_coffee', 'BEV-001', 'Espresso Coffee Beans 1kg', 'cat_bev', 'pcs', 12, 18.5, 10);
@@ -580,13 +513,9 @@ const Seed = {
       mk('it_milk', 'DRY-001', 'Fresh Milk 1L', 'cat_dry', 'pcs', 0.9, 1.6, 24);
       mk('it_labneh', 'DRY-002', 'Labneh 500g', 'cat_dry', 'pcs', 1.8, 3.2, 10);
       mk('it_cheese', 'DRY-003', 'Cheddar Cheese 200g', 'cat_dry', 'pcs', 2.1, 3.75, 10);
-      mk('it_crois', 'BAK-001', 'Butter Croissant', 'cat_bak', 'pcs', 0, 1.25, 20);
-      mk('it_flour', 'RAW-001', 'Flour', 'cat_raw', 'kg', 0.8, 1.2, 20, 'raw');
-      mk('it_butter', 'RAW-002', 'Butter', 'cat_raw', 'kg', 6, 8, 5, 'raw');
-      mk('it_sugar', 'RAW-003', 'Sugar', 'cat_raw', 'kg', 1, 1.5, 10, 'raw');
+      mk('it_crois', 'BAK-001', 'Butter Croissant', 'cat_bak', 'pcs', 0.45, 1.25, 20);
       mk('it_soap', 'CLN-001', 'Dish Soap 750ml', 'cat_cln', 'pcs', 1.1, 2, 12);
       mk('it_towel', 'CLN-002', 'Paper Towels (6 rolls)', 'cat_cln', 'pack', 1.5, 2.75, 12);
-      mk('it_room', 'SRV-001', 'Room Charge (per night)', 'cat_srv', 'night', 0, 60, 0, 'service', { sys: 'room_charge', revenueSys: 'room_rev' });
       mk('it_deliv', 'SRV-002', 'Delivery Fee', 'cat_srv', 'trip', 0, 3, 0, 'service');
 
       const party = (id, name, kind, phone, extra = {}) => {
@@ -606,8 +535,6 @@ const Seed = {
       d.users.push({ id: 'u_cash', username: 'cashier', password: '1234', fullName: 'Maya Cashier', role: 'cashier', perms: ROLE_PERMS.cashier.slice(), active: true, created: U.now() },
         { id: 'u_acct', username: 'accountant', password: '1234', fullName: 'Omar Accountant', role: 'accountant', perms: ROLE_PERMS.accountant.slice(), active: true, created: U.now() });
 
-      [['101', 'Standard', 1, 60], ['102', 'Standard', 1, 60], ['103', 'Standard', 1, 60], ['104', 'Twin', 1, 70], ['201', 'Deluxe', 2, 95], ['202', 'Deluxe', 2, 95], ['203', 'Family', 2, 120], ['301', 'Suite', 3, 150]]
-        .forEach(([name, type, floor, rate]) => d.rooms.push({ id: 'rm_' + name, name, type, floor, rate, status: 'available', capacity: type === 'Family' ? 4 : 2 }));
 
       // Opening capital
       Eng.post({ date: day(30), memo: 'Owner capital contribution', refType: null, ref: 'OPENING', lines: [{ accountId: 'acc_cash', debit: 15000 }, { accountId: 'acc_bank', debit: 25000 }, { accountId: 'acc_capital', credit: 40000 }] });
@@ -617,18 +544,13 @@ const Seed = {
         const tot = Eng.calc(tmp).total;
         Eng.saveInvoice(Object.assign(tmp, { date, accountId: sup, warehouseId: 'wh_main', currency: 'USD', rate: 1, paid: U.r(tot * paidPct), payAccountId: payAcc, notes: '' }));
       };
-      P(day(28), 'acc_s_global', [['it_coffee', 40], ['it_water', 480], ['it_juice', 120], ['it_cola', 480], ['it_tea', 60], ['it_chips', 240], ['it_choc', 240], ['it_nuts', 80], ['it_flour', 100], ['it_sugar', 50]], 1);
-      P(day(27), 'acc_s_dairy', [['it_milk', 120], ['it_labneh', 60], ['it_cheese', 60], ['it_butter', 30]], 0.5);
+      P(day(28), 'acc_s_global', [['it_coffee', 40], ['it_water', 480], ['it_juice', 120], ['it_cola', 480], ['it_tea', 60], ['it_chips', 240], ['it_choc', 240], ['it_nuts', 80], ['it_crois', 120], ['it_combo', 8]], 1);
+      P(day(27), 'acc_s_dairy', [['it_milk', 120], ['it_labneh', 60], ['it_cheese', 60]], 0.5);
       P(day(26), 'acc_s_clean', [['it_soap', 60], ['it_towel', 60]], 0);
       P(day(12), 'acc_s_dairy', [['it_milk', 80], ['it_labneh', 30]], 0, 'acc_cash');
 
       Eng.saveTransfer({ date: day(25), fromWh: 'wh_main', toWh: 'wh_shop', note: 'Initial shop stocking', lines: [['it_water', 96], ['it_cola', 96], ['it_chips', 60], ['it_choc', 60], ['it_juice', 24]].map(([itemId, qty]) => ({ itemId, qty })) });
 
-      d.recipes.push({ id: 'rc_crois', name: 'Butter Croissant (batch of 40)', itemId: 'it_crois', outputQty: 40, extraCost: 4, components: [{ itemId: 'it_flour', qty: 4 }, { itemId: 'it_butter', qty: 2 }, { itemId: 'it_sugar', qty: 0.5 }] });
-      d.recipes.push({ id: 'rc_combo', name: 'Snack Combo Box', itemId: 'it_combo', outputQty: 1, extraCost: 0, components: [{ itemId: 'it_chips', qty: 4 }, { itemId: 'it_choc', qty: 4 }, { itemId: 'it_nuts', qty: 1 }] });
-      Eng.produce({ date: day(24), recipeId: 'rc_crois', batches: 3, warehouseId: 'wh_main', note: 'Morning bake' });
-      Eng.produce({ date: day(22), recipeId: 'rc_combo', batches: 10, warehouseId: 'wh_main', note: '' });
-      Eng.disassemble({ date: day(15), itemId: 'it_combo', qty: 2, warehouseId: 'wh_main', note: 'Damaged boxes — recover contents', outputs: [{ itemId: 'it_chips', qty: 8, share: 35 }, { itemId: 'it_choc', qty: 8, share: 37 }, { itemId: 'it_nuts', qty: 2, share: 28 }] });
 
       const custs = ['acc_c_walkin', 'acc_c_walkin', 'acc_c_walkin', 'acc_c_amal', 'acc_c_cedar', 'acc_c_nour'];
       const sellable = ['it_coffee', 'it_water', 'it_juice', 'it_cola', 'it_tea', 'it_chips', 'it_choc', 'it_nuts', 'it_milk', 'it_labneh', 'it_cheese', 'it_crois', 'it_soap', 'it_towel', 'it_combo'];
@@ -662,12 +584,6 @@ const Seed = {
       if (amalDue) Eng.saveVoucher({ type: 'receipt', date: amalDue.date > day(2) ? amalDue.date : day(2), accountId: 'acc_c_amal', cashAccountId: 'acc_cash', amount: Eng.dueOf(amalDue), currency: 'USD', rate: 1, invoiceId: amalDue.id, memo: 'Payment for ' + amalDue.no });
       Eng.saveAdjustment({ kind: 'waste', date: day(5), warehouseId: 'wh_main', reason: 'Expired milk', lines: [{ itemId: 'it_milk', qty: 6 }] });
 
-      // Hotel: one occupied room with orders, one being cleaned
-      d.stays.push({ id: 'st_1', roomId: 'rm_102', guest: 'Karim Mansour', phone: '+961 76 123 456', persons: 2, accountId: 'acc_c_walkin', checkIn: day(2) + 'T14:00:00.000Z', status: 'open',
-        orders: [{ id: 'o1', itemId: 'it_water', qty: 4, price: 0.75, time: day(2) + 'T18:00:00.000Z' }, { id: 'o2', itemId: 'it_crois', qty: 2, price: 1.25, time: day(1) + 'T08:00:00.000Z' }] });
-      d.rooms.find(r => r.id === 'rm_102').status = 'occupied';
-      d.rooms.find(r => r.id === 'rm_201').status = 'cleaning';
-      d.rooms.find(r => r.id === 'rm_301').status = 'maintenance';
 
       d.tasks.push(
         { id: 'tk_backup', name: 'Daily local backup', type: 'backup', frequency: 'daily', active: true, lastRun: null, config: {} },

@@ -102,7 +102,7 @@ V.backup = el => {
   </div>
   <div class="card mt"><div class="card-head"><h3>${UI.icon('history')}Local snapshots (last 5)</h3><button class="btn btn-light btn-sm" id="b-snap">${UI.icon('plus')}<span>Create snapshot now</span></button></div><div id="b-tbl"></div></div>
   <div class="card mt danger-zone"><div class="card-head"><h3>${UI.icon('alert')}Danger zone</h3></div><div class="card-body row gap wrap">
-    <button class="btn btn-light" id="b-demo">${UI.icon('refresh')}<span>Reset to demo data</span></button>
+    <button class="btn btn-light" id="b-demo">${UI.icon('refresh')}<span>Load demo data (for training)</span></button>
     <button class="btn btn-danger" id="b-fresh">${UI.icon('trash')}<span>Start fresh (empty company)</span></button>
     <p class="muted sm grow">Both actions take a snapshot first, so you can undo from the list above.</p></div></div>`;
   UI.mountTable(el.querySelector('#b-tbl'), { rows: snaps, search: false, empty: 'No snapshots yet. Automated tasks can create one daily.',
@@ -130,11 +130,9 @@ V.backup = el => {
   el.querySelector('#b-fresh').onclick = async () => {
     if (!(await UI.confirm('Erase ALL items, accounts, invoices and stock and start an empty company? Users and settings are kept.', { danger: true, ok: 'Erase everything' }))) return;
     Snapshots.create('Before start fresh');
-    const old = db(), b = Seed.blank();
+    const old = db(), b = Seed.fresh();
     b.users = old.users; Object.assign(b.settings, old.settings, { defaultWarehouseId: 'wh_main', walkInCustomerId: 'acc_c_walkin', defaultCashAccountId: 'acc_cash' });
-    b.currencies = old.currencies; b.warehouses = [{ id: 'wh_main', name: 'Main Warehouse', location: '' }];
-    b.accounts.push({ id: 'acc_c_walkin', code: '1200-001', name: 'Walk-in Customer', type: 'asset', parentId: 'acc_ar', kind: 'customer', active: true });
-    b.tasks = old.tasks.map(t => Object.assign(t, { lastRun: null }));
+    b.currencies = old.currencies;
     Store.replace(b); Eng.audit('Reset', 'Started fresh company'); Store.save(); UI.toast('Empty company ready'); App.shell();
   };
 };

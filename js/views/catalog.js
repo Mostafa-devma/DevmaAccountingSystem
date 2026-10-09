@@ -13,17 +13,17 @@ function localTabs(el, onShow) {
 }
 
 /* ---------------- Item form (shared) ---------------- */
-V.itemForm = (item, done) => {
+V.itemForm = (item, done, preset = {}) => {
   const d = db(), isNew = !item;
-  item = item || { code: '', barcode: '', name: '', categoryId: '', unit: 'pcs', cost: 0, price: 0, minQty: 0, type: 'stock', active: true };
+  item = item || Object.assign({ code: '', barcode: '', name: '', categoryId: '', unit: 'pcs', cost: 0, price: 0, price2: 0, minQty: 0, type: 'stock', active: true }, preset);
   if (isNew) { const n = d.items.length + 1; item.code = 'ITM-' + String(n).padStart(3, '0'); while (d.items.some(i => i.code === item.code)) item.code = 'ITM-' + String(Math.floor(Math.random() * 9000 + 1000)); }
   const m = UI.formModal({
     title: isNew ? 'New item' : 'Edit item — ' + item.name, icon: 'box', size: 'lg',
     fields: UI.fld('Item name *', UI.inp('name', item.name, 'required'), 'fld-2') + UI.fld('Code *', UI.inp('code', item.code)) +
       UI.fld('Barcode', `<div class="input-group">${UI.inp('barcode', item.barcode)}<button type="button" class="btn btn-light btn-sm" id="gen-bc" title="Generate">${UI.icon('barcode')}</button></div>`) +
       UI.fld('Category', `<div class="input-group">${UI.sel('categoryId', UI.opts(d.categories, 'id', 'name', item.categoryId, '— None —'))}<button type="button" class="btn btn-light btn-sm" id="new-cat" title="New category">${UI.icon('plus')}</button></div>`) +
-      UI.fld('Type', UI.sel('type', UI.opts(Object.entries(TYPES), 0, 1, item.type))) + UI.fld('Unit', UI.inp('unit', item.unit, 'list="dl-units"') + '<datalist id="dl-units"><option>pcs<option>box<option>kg<option>g<option>L<option>pack<option>night<option>hour</datalist>') +
-      UI.fld('Cost (' + UI.base().code + ')', UI.inp('cost', item.cost, 'type="number" step="0.01" min="0"')) + UI.fld('Sale price (' + UI.base().code + ')', UI.inp('price', item.price, 'type="number" step="0.01" min="0"')) +
+      UI.fld('Type', UI.sel('type', UI.opts(Object.entries(TYPES).filter(([k]) => k !== 'raw' || item.type === 'raw'), 0, 1, item.type))) + UI.fld('Unit', UI.inp('unit', item.unit, 'list="dl-units"') + '<datalist id="dl-units"><option>pcs<option>box<option>kg<option>g<option>L<option>pack<option>night<option>hour</datalist>') +
+      UI.fld('Cost (' + UI.base().code + ')', UI.inp('cost', item.cost, 'type="number" step="0.01" min="0"')) + UI.fld('Sale price (' + UI.base().code + ')', UI.inp('price', item.price, 'type="number" step="0.01" min="0"')) + UI.fld('Wholesale price (' + UI.base().code + ')', UI.inp('price2', item.price2 || '', 'type="number" step="0.01" min="0" placeholder="optional"')) +
       UI.fld('Minimum qty (reorder level)', UI.inp('minQty', item.minQty, 'type="number" step="1" min="0"')) +
       UI.fld('Margin', `<div class="readonly-v" id="margin">—</div>`) +
       (isNew ? `<div class="fld fld-full section-label">Opening stock (optional)</div>` + UI.fld('Opening quantity', UI.inp('openQty', '', 'type="number" step="1" min="0" placeholder="0"')) + UI.fld('Warehouse', UI.sel('openWh', UI.opts(d.warehouses, 'id', 'name', Eng.defWh()))) : '') +
@@ -42,7 +42,7 @@ V.itemForm = (item, done) => {
       let saved;
       Eng.tx(() => {
         const o = isNew ? { id: U.uid('it'), created: U.now() } : Eng.item(item.id);
-        Object.assign(o, { name: x.name, code: x.code, barcode: x.barcode, categoryId: x.categoryId, type: x.type, unit: x.unit || 'pcs', cost: +x.cost || 0, price: +x.price || 0, minQty: +x.minQty || 0, active: x.active });
+        Object.assign(o, { name: x.name, code: x.code, barcode: x.barcode, categoryId: x.categoryId, type: x.type, unit: x.unit || 'pcs', cost: +x.cost || 0, price: +x.price || 0, price2: +x.price2 || 0, minQty: +x.minQty || 0, active: x.active });
         if (isNew) d.items.push(o);
         if (isNew && +x.openQty > 0 && o.type !== 'service') Eng.saveAdjustment({ kind: 'opening', date: U.today(), warehouseId: x.openWh, reason: 'Opening stock for new item', lines: [{ itemId: o.id, qty: +x.openQty, cost: o.cost }] });
         Eng.audit(isNew ? 'Created' : 'Updated', 'Item ' + o.code + ' ' + o.name);
@@ -57,7 +57,7 @@ V.itemForm = (item, done) => {
 };
 V.deleteItem = async (id, after) => {
   const d = db(), it = Eng.item(id);
-  const used = d.stockMoves.some(m => m.itemId === id) || d.invoices.some(i => i.lines.some(l => l.itemId === id)) || d.recipes.some(r => r.itemId === id || r.components.some(c => c.itemId === id));
+  const used = d.stockMoves.some(m => m.itemId === id) || d.invoices.some(i => i.lines.some(l => l.itemId === id));
   if (it.sys) return UI.toast('This is a system item and cannot be deleted.', 'warn');
   if (used) {
     if (await UI.confirm(`"${it.name}" has transactions, so it cannot be deleted. Deactivate it instead? It will be hidden from POS and new invoices.`, { ok: 'Deactivate' })) { it.active = false; Eng.audit('Deactivated', 'Item ' + it.name); Store.save(); UI.toast('Item deactivated'); after && after(); }
@@ -71,9 +71,9 @@ V.items = (el, a, q) => {
   const d = db();
   const draw = () => {
     const sm = Eng.stockMap(), f = { cat: q.cat || '', type: q.type || '', st: q.st || '' };
-    let rows = d.items.filter(i => (!f.cat || i.categoryId === f.cat) && (!f.type || i.type === f.type) && (f.st === 'inactive' ? i.active === false : f.st === 'all' ? true : i.active !== false));
+    let rows = d.items.filter(i => !i.sys && (!f.cat || i.categoryId === f.cat) && (!f.type || i.type === f.type) && (f.st === 'inactive' ? i.active === false : f.st === 'all' ? true : i.active !== false));
     if (f.st === 'low') rows = d.items.filter(i => i.type !== 'service' && +i.minQty > 0 && sm.item(i.id) <= +i.minQty);
-    el.innerHTML = UI.head({ title: 'Items', icon: 'box', crumbs: [['Items']], sub: `${d.items.length} items in ${d.categories.length} categories`,
+    el.innerHTML = UI.head({ title: 'Items', icon: 'box', crumbs: [['Items']], sub: `${d.items.filter(i => !i.sys).length} items in ${d.categories.length} categories`,
       actions: UI.btn('Import CSV', { icon: 'upload', attrs: 'id="it-imp"' }) + UI.btn('Print list', { icon: 'printer', attrs: 'id="it-print"' }) + UI.btn('New item', { icon: 'plus', cls: 'btn-primary', attrs: 'id="it-new"' }) }) +
       `<div class="card"><div class="filters">
         ${UI.fld('Category', UI.sel('cat', UI.opts(d.categories, 'id', 'name', f.cat, 'All categories')))}

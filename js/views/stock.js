@@ -1,4 +1,4 @@
-/* Devma — Stock management: transfers, opening stock, movements, update/waste, production, disassembling */
+/* Devma — Stock management: transfers, opening stock, movements, update/waste */
 'use strict';
 
 /* reusable item-lines editor used inside modals */
@@ -78,7 +78,7 @@ V.stock = (el, [tab = 'transfers'], q) => {
     el.querySelector('#s-new').onclick = () => V.adjustmentForm({ kind: 'opening' }, () => App.refresh());
   } else {
     const f = { wh: q.wh || '', type: q.type || '', from: q.from || U.addDays(U.today(), -30), to: q.to || U.today() };
-    const TYPES_M = { purchase: 'Purchase', sale: 'Sale', sale_return: 'Sales return', purchase_return: 'Purchase return', transfer: 'Transfer', increase: 'Increase', decrease: 'Decrease', waste: 'Waste', opening: 'Opening', count: 'Stock count', production_in: 'Production (used)', production_out: 'Production (made)', disassembly_in: 'Disassembly (source)', disassembly_out: 'Disassembly (parts)' };
+    const TYPES_M = { purchase: 'Purchase', sale: 'Sale', sale_return: 'Sales return', purchase_return: 'Purchase return', transfer: 'Transfer', increase: 'Increase', decrease: 'Decrease', waste: 'Waste', opening: 'Opening', count: 'Stock count' };
     el.innerHTML = head(UI.btn('New transfer', { icon: 'truck', attrs: 'id="s-new"' })) + `<div class="card"><div class="filters">${UI.fld('From', UI.inp('from', f.from, 'type="date"'))}${UI.fld('To', UI.inp('to', f.to, 'type="date"'))}${UI.fld('Warehouse', UI.sel('wh', UI.opts(d.warehouses, 'id', 'name', f.wh, 'All')))}${UI.fld('Movement', UI.sel('type', UI.opts(Object.entries(TYPES_M), 0, 1, f.type, 'All')))}</div><div id="s-tbl"></div></div>`;
     el.querySelectorAll('.filters [name]').forEach(s => s.onchange = () => { q[s.name] = s.value; V.stock(el, [tab], q); });
     const rows = d.stockMoves.filter(m => m.date >= f.from && m.date <= f.to && (!f.wh || m.warehouseId === f.wh) && (!f.type || m.type === f.type)).sort((a, b) => b.date.localeCompare(a.date) || (b.created || '').localeCompare(a.created || ''));
@@ -144,132 +144,4 @@ V.waste = (el, a, q) => {
   el.querySelectorAll('[data-k]').forEach(b => b.onclick = () => V.adjustmentForm({ kind: b.dataset.k }));
   el.querySelector('#w-count').onclick = () => V.stockCount(Eng.defWh(), '', () => App.refresh());
   if (q.new) V.adjustmentForm({ kind: q.new === '1' ? 'waste' : q.new });
-};
-
-/* ---------------- Production line ---------------- */
-const recipeCost = r => U.sum(r.components, c => (+(Eng.item(c.itemId) || {}).cost || 0) * c.qty) + (+r.extraCost || 0);
-V.recipeForm = (r, done) => {
-  const d = db(), isNew = !r; r = r || { name: '', itemId: '', outputQty: 1, extraCost: 0, components: [] }; let ed;
-  UI.modal({ title: isNew ? 'New recipe (bill of materials)' : 'Edit recipe', icon: 'factory', size: 'xl',
-    body: `<form class="form-grid">${UI.fld('Recipe name *', UI.inp('name', r.name), 'fld-2')}${UI.fld('Finished item *', UI.sel('itemId', UI.opts(d.items.filter(i => i.type === 'stock'), 'id', i => i.code + ' — ' + i.name, r.itemId, '— Select —')))}
-      ${UI.fld('Output quantity per batch', UI.inp('outputQty', r.outputQty, 'type="number" step="any" min="0"'))}${UI.fld('Labour / overhead per batch', UI.inp('extraCost', r.extraCost, 'type="number" step="any" min="0"'))}</form>
-      <div class="section-label mt">Components used per batch</div><div id="rc-lines"></div><div class="hint mt" id="rc-cost"></div>`,
-    onOpen: me => {
-      const f = me.querySelector('form'), cost = () => { const tmp = { components: ed.get().map(l => ({ itemId: l.itemId, qty: +l.qty || 0 })), extraCost: +f.extraCost.value || 0 }, c = recipeCost(tmp); me.querySelector('#rc-cost').innerHTML = `${UI.icon('coins')}Estimated batch cost <b>${UI.money(c)}</b> → unit cost <b>${UI.money(c / (+f.outputQty.value || 1))}</b> at current average costs.`; };
-      ed = V.linesEditor(me.querySelector('#rc-lines'), r.components, { filter: i => i.type !== 'service', onChange: cost });
-      f.outputQty.oninput = f.extraCost.oninput = cost; cost();
-    },
-    buttons: [{ label: 'Cancel', onClick: m => m.close() }, { label: 'Save recipe', cls: 'btn-primary', icon: 'check', onClick: m => {
-      const x = UI.formData(m.el.querySelector('form')), comps = ed.get().filter(l => +l.qty > 0).map(l => ({ itemId: l.itemId, qty: +l.qty }));
-      if (!x.name || !x.itemId) return UI.toast('Name and finished item are required.', 'error');
-      if (!(+x.outputQty > 0)) return UI.toast('Output quantity must be greater than zero.', 'error');
-      if (!comps.length) return UI.toast('Add at least one component.', 'error');
-      if (comps.some(c => c.itemId === x.itemId)) return UI.toast('The finished item cannot be its own component.', 'error');
-      const o = isNew ? { id: U.uid('rc') } : Eng.get('recipes', r.id);
-      Object.assign(o, { name: x.name, itemId: x.itemId, outputQty: +x.outputQty, extraCost: +x.extraCost || 0, components: comps }); if (isNew) d.recipes.push(o);
-      Eng.audit(isNew ? 'Created' : 'Updated', 'Recipe ' + o.name); Store.save(); UI.toast('Recipe saved'); m.close(); done ? done(o) : App.refresh();
-    } }] });
-};
-V.productionForm = (preset = {}) => {
-  const d = db();
-  if (!d.recipes.length) return UI.toast('Create a recipe first.', 'warn');
-  UI.modal({ title: 'New production order', icon: 'factory', size: 'lg',
-    body: `<form class="form-grid">${UI.fld('Recipe', UI.sel('recipeId', UI.opts(d.recipes, 'id', 'name', preset.recipeId || d.recipes[0].id)), 'fld-2')}${UI.fld('Batches', UI.inp('batches', preset.batches || 1, 'type="number" step="any" min="0"'))}
-      ${UI.fld('Date', UI.inp('date', U.today(), 'type="date"'))}${UI.fld('Warehouse', UI.sel('warehouseId', UI.opts(d.warehouses, 'id', 'name', preset.warehouseId || Eng.defWh())))}${UI.fld('Note', UI.inp('note', ''))}</form><div id="pr-req" class="mt"></div>`,
-    onOpen: me => {
-      const f = me.querySelector('form'), req = () => {
-        const r = Eng.get('recipes', f.recipeId.value), b = +f.batches.value || 0, w = f.warehouseId.value, fin = Eng.item(r.itemId);
-        let short = 0;
-        const rows = r.components.map(c => { const it = Eng.item(c.itemId), need = c.qty * b, av = Eng.qty(c.itemId, w), ok = av >= need - 1e-4; if (!ok) short++; return `<tr><td>${UI.esc(it.name)}</td><td class="r">${UI.qty(need)} ${UI.esc(it.unit)}</td><td class="r">${UI.qty(av)}</td><td class="r">${UI.num(need * it.cost)}</td><td>${ok ? UI.badge('OK', 'green') : UI.badge('Short ' + UI.qty(need - av), 'red')}</td></tr>`; }).join('');
-        const tot = recipeCost(r) * b;
-        me.querySelector('#pr-req').innerHTML = `<div class="section-label">Materials required</div><table class="tbl"><thead><tr><th>Component</th><th class="r">Needed</th><th class="r">Available</th><th class="r">Cost</th><th></th></tr></thead><tbody>${rows}</tbody></table>
-          <div class="out-box ${short ? 'bad' : ''}">${UI.icon(short ? 'alert' : 'factory')}<div>Output: <b>${UI.qty(r.outputQty * b)} × ${UI.esc(fin.name)}</b><br><span class="muted">Total cost ${UI.money(tot)} · unit cost ${UI.money(r.outputQty * b ? tot / (r.outputQty * b) : 0)}${short ? ` · <b class="neg">${short} component(s) short</b>` : ''}</span></div></div>`;
-      };
-      f.recipeId.onchange = f.batches.oninput = f.warehouseId.onchange = req; req();
-    },
-    buttons: [{ label: 'Cancel', onClick: m => m.close() }, { label: 'Produce', cls: 'btn-primary', icon: 'factory', onClick: m => {
-      const x = UI.formData(m.el.querySelector('form')), p = UI.try(() => Eng.produce(x));
-      if (p) { m.close(); UI.toast(`${p.no}: produced ${UI.qty(p.output.qty)} × ${Eng.item(p.output.itemId).name}`); App.go('production/orders'); }
-    } }] });
-};
-V.showProduction = id => {
-  const p = Eng.get('productions', id); if (!p) return UI.toast('Production order not found.', 'error');
-  const r = Eng.get('recipes', p.recipeId), fin = Eng.item(p.output.itemId);
-  const body = docMeta([['Number', p.no], ['Date', UI.date(p.date)], ['Recipe', UI.esc(r ? r.name : '(deleted)')], ['Batches', UI.qty(p.batches)], ['Warehouse', UI.esc(whName(p.warehouseId))], ['Note', UI.esc(p.note || '—')]]) +
-    `<div class="section-label">Materials consumed</div>` + linesTable(p.consumed, [['Quantity', l => UI.qty(l.qty)], ['Unit cost', l => UI.num(l.cost)], ['Value', l => UI.num(l.qty * l.cost)]]) +
-    `<div class="out-box">${UI.icon('factory')}<div>Produced <b>${UI.qty(p.output.qty)} × <a class="link" href="#/item/${fin.id}">${UI.esc(fin.name)}</a></b><br><span class="muted">Total cost ${UI.money(p.output.total)} · unit cost ${UI.money(p.output.unitCost)}</span></div></div>`;
-  UI.modal({ title: 'Production ' + p.no, icon: 'factory', size: 'lg', body,
-    buttons: [{ label: 'Undo', cls: 'btn-light danger', icon: 'trash', onClick: async m => { if (await UI.confirm(`Undo production ${p.no}? Materials return to stock and the produced items are removed.`, { danger: true, ok: 'Undo' })) { if (UI.try(() => Eng.deleteProduction(id), 'Production undone')) { m.close(); App.refresh(); } } } },
-      ...(r ? [{ label: 'Produce again', icon: 'refresh', onClick: m => { m.close(); V.productionForm({ recipeId: r.id, batches: p.batches, warehouseId: p.warehouseId }); } }] : []),
-      { label: 'Print', icon: 'printer', onClick: () => UI.printTable('Production order ' + p.no, '', body) }, { label: 'Close', cls: 'btn-primary', onClick: m => m.close() }] });
-};
-V.production = (el, [tab = 'orders'], q) => {
-  const d = db();
-  el.innerHTML = UI.head({ title: 'Production Line', icon: 'factory', crumbs: [['Stock', 'inventory'], ['Production Line']],
-    actions: UI.btn('New recipe', { icon: 'plus', attrs: 'id="p-rc"' }) + UI.btn('New production', { icon: 'factory', cls: 'btn-primary', attrs: 'id="p-new"' }) }) +
-    UI.tabs([['orders', 'Production orders', d.productions.length], ['recipes', 'Recipes (BOM)', d.recipes.length]], tab, 'production') + '<div class="card"><div id="p-tbl"></div></div>';
-  if (tab === 'orders') UI.mountTable(el.querySelector('#p-tbl'), { rows: d.productions.slice().reverse(), csv: 'production', empty: 'No production yet.', onRow: r => V.showProduction(r.id),
-    columns: [{ key: 'no', label: 'Number', render: r => `<b>${r.no}</b>` }, { key: 'date', label: 'Date', text: r => UI.date(r.date), sortVal: r => r.date }, { key: 'rc', label: 'Recipe', text: r => (Eng.get('recipes', r.recipeId) || {}).name || '(deleted)' },
-      { key: 'b', label: 'Batches', align: 'r', text: r => UI.qty(r.batches) }, { key: 'out', label: 'Output', text: r => UI.qty(r.output.qty) + ' × ' + ((Eng.item(r.output.itemId) || {}).name || '') },
-      { key: 'tot', label: 'Total cost', align: 'r', text: r => UI.num(r.output.total) }, { key: 'u', label: 'Unit cost', align: 'r', text: r => UI.num(r.output.unitCost) }, { key: 'wh', label: 'Warehouse', text: r => whName(r.warehouseId) }] });
-  else UI.mountTable(el.querySelector('#p-tbl'), { rows: d.recipes, empty: 'No recipes yet. A recipe lists the materials needed to make one batch of a product.', onRow: r => V.recipeForm(r),
-    columns: [{ key: 'name', label: 'Recipe', render: r => `<b>${UI.esc(r.name)}</b>` }, { key: 'it', label: 'Finished item', text: r => (Eng.item(r.itemId) || {}).name || '' }, { key: 'out', label: 'Output / batch', align: 'r', text: r => UI.qty(r.outputQty) },
-      { key: 'c', label: 'Components', text: r => r.components.map(c => UI.qty(c.qty) + ' ' + ((Eng.item(c.itemId) || {}).name || '')).join(', ') }, { key: 'bc', label: 'Batch cost', align: 'r', text: r => UI.num(recipeCost(r)) }, { key: 'uc', label: 'Unit cost', align: 'r', text: r => UI.num(recipeCost(r) / r.outputQty) },
-      { key: 'a', label: '', sort: false, render: () => `<span class="row-acts"><button class="btn btn-light btn-sm" data-act="make">${UI.icon('factory')}<span>Produce</span></button><button class="icon-btn sm" data-act="del" title="Delete">${UI.icon('trash')}</button></span>` }],
-    onAction: async (act, r) => {
-      if (act === 'make') return V.productionForm({ recipeId: r.id });
-      if (await UI.confirm(`Delete recipe "${r.name}"? Past production orders are kept.`, { danger: true, ok: 'Delete' })) { d.recipes = d.recipes.filter(x => x.id !== r.id); Store.save(); UI.toast('Recipe deleted'); App.refresh(); }
-    } });
-  el.querySelector('#p-new').onclick = () => V.productionForm();
-  el.querySelector('#p-rc').onclick = () => V.recipeForm();
-};
-
-/* ---------------- Disassembling ---------------- */
-V.disassemblyForm = (preset = {}) => {
-  const d = db(); let ed;
-  UI.modal({ title: 'Disassemble item', icon: 'split', size: 'xl',
-    body: `<form class="form-grid">${UI.fld('Item to disassemble *', UI.inp('src', UI.itemLabel(Eng.item(preset.itemId)), 'list="dl-dis-src" placeholder="Type code or name"') + UI.itemDatalist('dl-dis-src', i => i.type !== 'service'), 'fld-2')}
-      ${UI.fld('Quantity', UI.inp('qty', preset.qty || 1, 'type="number" step="any" min="0"'))}${UI.fld('Date', UI.inp('date', U.today(), 'type="date"'))}${UI.fld('Warehouse', UI.sel('warehouseId', UI.opts(d.warehouses, 'id', 'name', Eng.defWh())))}${UI.fld('Note', UI.inp('note', ''), 'fld-2')}</form>
-      <div class="hint mt" id="ds-info">${UI.icon('info')}Choose an item. If it has a production recipe, its components are filled in automatically.</div>
-      <div class="row between mt"><div class="section-label">Output parts</div><button type="button" class="btn btn-light btn-sm" id="ds-auto">${UI.icon('sparkle')}<span>Split cost by sale value</span></button></div><div id="ds-lines"></div><div id="ds-sum" class="muted sm mt-s"></div>`,
-    onOpen: me => {
-      const f = me.querySelector('form'), src = () => UI.findItem(f.src.value);
-      const sum = () => { const s = U.r(U.sum(ed.get(), l => +l.share || 0)); me.querySelector('#ds-sum').innerHTML = `Cost shares total: <b class="${Math.abs(s - 100) > 0.01 ? 'neg' : 'pos'}">${s}%</b> (must be 100%)`; };
-      ed = V.linesEditor(me.querySelector('#ds-lines'), preset.outputs, { share: true, filter: i => i.type !== 'service', onChange: sum });
-      const info = () => { const it = src(); if (!it) return; const w = f.warehouseId.value; me.querySelector('#ds-info').innerHTML = `${UI.icon('info')}<b>${UI.esc(it.name)}</b> — available ${UI.qty(Eng.qty(it.id, w))} ${UI.esc(it.unit)} · average cost ${UI.money(it.cost)} · value to split ${UI.money(it.cost * (+f.qty.value || 0))}`; };
-      f.src.onchange = () => {
-        const it = src(); if (!it) { if (f.src.value) UI.toast('Item not found.', 'warn'); return; }
-        const r = d.recipes.find(x => x.itemId === it.id), last = d.disassemblies.slice().reverse().find(x => x.itemId === it.id);
-        if (last) ed.set(last.outputs.map(o => ({ itemId: o.itemId, qty: o.qty / last.qty * (+f.qty.value || 1), share: o.share })));
-        else if (r) { const tot = U.sum(r.components, c => c.qty * (Eng.item(c.itemId).cost || 0)) || 1; ed.set(r.components.map(c => ({ itemId: c.itemId, qty: U.r(c.qty / r.outputQty * (+f.qty.value || 1), 4), share: U.r(c.qty * (Eng.item(c.itemId).cost || 0) / tot * 100, 2) }))); }
-        info(); sum();
-      };
-      f.qty.oninput = f.warehouseId.onchange = info;
-      me.querySelector('#ds-auto').onclick = () => { const ls = ed.get(), tot = U.sum(ls, l => (+l.qty || 0) * (Eng.item(l.itemId).price || 0)); if (!tot) return UI.toast('Add parts with quantities first.', 'warn'); let acc = 0; ls.forEach((l, i) => { l.share = i === ls.length - 1 ? U.r(100 - acc, 2) : U.r((+l.qty || 0) * Eng.item(l.itemId).price / tot * 100, 2); acc += l.share; }); ed.set(ls); sum(); };
-      if (preset.itemId) info(); sum();
-    },
-    buttons: [{ label: 'Cancel', onClick: m => m.close() }, { label: 'Disassemble', cls: 'btn-primary', icon: 'split', onClick: m => {
-      const x = UI.formData(m.el.querySelector('form')), it = UI.findItem(x.src);
-      const r = UI.try(() => Eng.disassemble({ itemId: it ? it.id : '', qty: x.qty, date: x.date, warehouseId: x.warehouseId, note: x.note, outputs: ed.get().map(l => ({ itemId: l.itemId, qty: +l.qty, share: +l.share || 0 })) }));
-      if (r) { m.close(); UI.toast(`${r.no} completed`); App.go('disassembly'); }
-    } }] });
-};
-V.showDisassembly = id => {
-  const x = Eng.get('disassemblies', id); if (!x) return UI.toast('Record not found.', 'error');
-  const src = Eng.item(x.itemId);
-  const body = docMeta([['Number', x.no], ['Date', UI.date(x.date)], ['Source item', `<a class="link" href="#/item/${src.id}">${UI.esc(src.name)}</a>`], ['Quantity', UI.qty(x.qty)], ['Warehouse', UI.esc(whName(x.warehouseId))], ['Cost split', UI.money(x.totalCost)]]) +
-    `<div class="section-label">Parts recovered</div>` + linesTable(x.outputs, [['Quantity', l => UI.qty(l.qty)], ['Share', l => l.share + '%'], ['Unit cost', l => UI.num(l.unitCost)]]) + (x.note ? `<p class="muted">${UI.esc(x.note)}</p>` : '');
-  UI.modal({ title: 'Disassembly ' + x.no, icon: 'split', size: 'lg', body,
-    buttons: [{ label: 'Undo', cls: 'btn-light danger', icon: 'trash', onClick: async m => { if (await UI.confirm(`Undo ${x.no}?`, { danger: true, ok: 'Undo' })) { if (UI.try(() => Eng.deleteDisassembly(id), 'Disassembly undone')) { m.close(); App.refresh(); } } } },
-      { label: 'Repeat', icon: 'refresh', onClick: m => { m.close(); V.disassemblyForm({ itemId: x.itemId, qty: x.qty, outputs: x.outputs }); } },
-      { label: 'Print', icon: 'printer', onClick: () => UI.printTable('Disassembly ' + x.no, '', body) }, { label: 'Close', cls: 'btn-primary', onClick: m => m.close() }] });
-};
-V.disassembly = el => {
-  const d = db();
-  el.innerHTML = UI.head({ title: 'Disassembling', icon: 'split', crumbs: [['Stock', 'inventory'], ['Disassembling']], actions: UI.btn('New disassembly', { icon: 'plus', cls: 'btn-primary', attrs: 'id="d-new"' }) }) +
-    `<div class="card"><div class="card-body hint">${UI.icon('info')}Break a kit, bundle or damaged product into its parts. The source item's cost is split between the parts by the percentages you set.</div><div id="d-tbl"></div></div>`;
-  UI.mountTable(el.querySelector('#d-tbl'), { rows: d.disassemblies.slice().reverse(), csv: 'disassembly', empty: 'Nothing disassembled yet.', onRow: r => V.showDisassembly(r.id),
-    columns: [{ key: 'no', label: 'Number', render: r => `<b>${r.no}</b>` }, { key: 'date', label: 'Date', text: r => UI.date(r.date), sortVal: r => r.date }, { key: 'src', label: 'Source item', text: r => (Eng.item(r.itemId) || {}).name || '' },
-      { key: 'qty', label: 'Qty', align: 'r', text: r => UI.qty(r.qty) }, { key: 'parts', label: 'Parts', text: r => r.outputs.map(o => UI.qty(o.qty) + ' ' + ((Eng.item(o.itemId) || {}).name || '')).join(', ') }, { key: 'v', label: 'Cost split', align: 'r', text: r => UI.num(r.totalCost) }, { key: 'wh', label: 'Warehouse', text: r => whName(r.warehouseId) }] });
-  el.querySelector('#d-new').onclick = () => V.disassemblyForm();
 };

@@ -34,7 +34,7 @@ V.invoices = (el, [type = 'sale'], q) => {
   el.querySelectorAll('.filters [name]').forEach(s => s.onchange = () => { q[s.name] = s.value; V.invoices(el, [type], q); });
   el.querySelector('#iv-clear').onclick = () => App.go('invoices/' + type);
   const tbl = UI.mountTable(el.querySelector('#iv-tbl'), { rows, csv: type + '-invoices', onRow: r => App.go('invoice/' + r.id),
-    columns: [{ key: 'no', label: 'Number', render: r => `<b>${r.no}</b>${r.source === 'pos' ? ' ' + UI.badge('POS', 'purple') : r.source === 'room' ? ' ' + UI.badge('Room', 'blue') : ''}` },
+    columns: [{ key: 'no', label: 'Number', render: r => `<b>${r.no}</b>${r.source === 'pos' ? ' ' + UI.badge('POS', 'purple') : ''}` },
       { key: 'date', label: 'Date', text: r => UI.date(r.date), sortVal: r => r.date }, { key: 'party', label: T.party === 'customer' ? 'Customer' : 'Supplier', text: r => accName(r.accountId) },
       ...(type === 'sale' ? [{ key: 'sm', label: 'Salesman', text: r => smName(r.salesmanId) }] : []),
       { key: 'total', label: 'Total', align: 'r', sortVal: B, text: r => UI.money(Eng.calc(r).total, r.currency) }, { key: 'paid', label: 'Paid', align: 'r', sortVal: P, text: r => UI.num(Eng.paidOf(r)) },
@@ -199,7 +199,7 @@ V.invoiceView = (el, id) => {
   const T = Eng.INV[inv.type], c = Eng.calc(inv), st = Eng.statusOf(inv), due = Eng.dueOf(inv);
   const vch = d.vouchers.filter(v => v.invoiceId === id), returns = d.invoices.filter(i => i.returnOf === id), je = d.journal.find(j => j.refType === 'invoice' && j.refId === id);
   const canRet = inv.type === 'sale' || inv.type === 'purchase';
-  el.innerHTML = UI.head({ title: `${T.label} ${inv.no}`, icon: 'file', crumbs: [['Invoices', 'invoices/' + inv.type], [T.plural, 'invoices/' + inv.type], [inv.no]], sub: UI.statusBadge(st) + (inv.source === 'pos' ? ' ' + UI.badge('POS sale', 'purple') : '') + (inv.source === 'room' ? ' ' + UI.badge('Room checkout', 'blue') : ''),
+  el.innerHTML = UI.head({ title: `${T.label} ${inv.no}`, icon: 'file', crumbs: [['Invoices', 'invoices/' + inv.type], [T.plural, 'invoices/' + inv.type], [inv.no]], sub: UI.statusBadge(st) + (inv.source === 'pos' ? ' ' + UI.badge('POS sale', 'purple') : ''),
     actions: `<a class="btn btn-light" href="#/invoices/${inv.type}">${UI.icon('arrowL')}<span>List</span></a>` + UI.btn('Delete', { icon: 'trash', cls: 'btn-light danger', attrs: 'id="v-del"' }) + UI.btn('Duplicate', { icon: 'copy', attrs: 'id="v-dup"' }) +
       (canRet ? UI.btn('Return', { icon: 'return', attrs: 'id="v-ret"' }) : '') + UI.btn('Edit', { icon: 'edit', attrs: 'id="v-edit"' }) + (inv.type === 'sale' ? UI.btn('Receipt', { icon: 'receipt', attrs: 'id="v-rcpt"' }) : '') + UI.btn('Print', { icon: 'printer', attrs: 'id="v-print"' }) +
       (due > 0.004 ? UI.btn(inv.type === 'sale' || inv.type === 'purchase_return' ? 'Receive payment' : 'Make payment', { icon: 'cash', cls: 'btn-primary', attrs: 'id="v-pay"' }) : '') }) +
@@ -220,7 +220,7 @@ V.invoiceView = (el, id) => {
   $('#v-print').onclick = () => UI.print(V.invoiceDoc(inv));
   if ($('#v-rcpt')) $('#v-rcpt').onclick = () => UI.print(V.receiptDoc(inv), true);
   if ($('#v-pay')) $('#v-pay').onclick = () => V.payInvoice(inv, () => App.refresh());
-  $('#v-edit').onclick = () => { if (inv.source === 'room') UI.toast('Tip: this invoice came from a room checkout — editing it will not reopen the room.', 'info'); App.go('invoice/edit/' + id); };
+  $('#v-edit').onclick = () => { App.go('invoice/edit/' + id); };
   $('#v-dup').onclick = () => App.go(`invoice/new/${inv.type}?from=${id}&mode=dup`);
   if ($('#v-ret')) $('#v-ret').onclick = () => App.go(`invoice/new/${inv.type}_return?from=${id}`);
   $('#v-del').onclick = async () => {

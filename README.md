@@ -7,7 +7,7 @@ Double-click `index.html` (Chrome / Edge). No install or server needed. Data is 
 
 **Arabic / English:** use the `العربية` button on the login screen, the `ع / EN` button in the top bar, or Settings → Appearance → Language. Arabic switches the whole interface to right-to-left, including printed invoices and receipts.
 
-Demo logins: `admin / admin` · `cashier / 1234` · `accountant / 1234`
+First login: `admin / admin` — change the password from the user menu. The system starts empty; to explore with sample data use **Backup → Load demo data (for training)**.
 
 ## Structure
 - `js/db.js` — data store, posting engine (ledger + stock), demo data

@@ -3,7 +3,6 @@
 const V = {}; // views register themselves here
 
 const MODULES = [
-  { key: 'rooms', label: 'Rooms', icon: 'bed', path: 'rooms', hue: 'h1' },
   { key: 'pos', label: 'P.O.S', icon: 'pos', path: 'pos', hue: 'h2' },
   { key: 'converter', label: 'Money Converter', icon: 'exchange', path: 'converter', hue: 'h3' },
   { key: 'categories', label: 'Categories', icon: 'layers', path: 'categories', hue: 'h4' },
@@ -16,8 +15,6 @@ const MODULES = [
   { key: 'cashbox', label: 'Cash Box', icon: 'wallet', path: 'cashbox', hue: 'h6' },
   { key: 'salesman', label: 'Salesman', icon: 'badge', path: 'salesman', hue: 'h1' },
   { key: 'stockmgmt', label: 'Stock Management', icon: 'truck', path: 'stock/transfers', hue: 'h3' },
-  { key: 'production', label: 'Production Line', icon: 'factory', path: 'production/orders', hue: 'h4' },
-  { key: 'disassembly', label: 'Disassembling', icon: 'split', path: 'disassembly', hue: 'h5' },
   { key: 'trialbalance', label: 'Trial Balance', icon: 'scale', path: 'trial-balance', hue: 'h6' },
   { key: 'statement', label: 'Account Statement', icon: 'book', path: 'statement', hue: 'h1' },
   { key: 'warehouses', label: 'Warehouses', icon: 'warehouse', path: 'warehouses', hue: 'h2' },
@@ -33,8 +30,8 @@ const NAV = [
   { label: 'Dashboard', icon: 'home', path: 'dashboard' },
   { label: 'Items', icon: 'box', children: [['Items List', 'items', 'items'], ['Categories', 'categories', 'categories'], ['Warehouses', 'warehouses', 'warehouses']] },
   { label: 'Currencies', icon: 'coins', children: [['Currencies', 'currencies', 'currencies'], ['Money Converter', 'converter', 'converter']] },
-  { label: 'Stock Management', icon: 'truck', children: [['Stock Inventory', 'inventory', 'inventory'], ['Transfers', 'stock/transfers', 'stockmgmt'], ['Opening Stock', 'stock/opening', 'stockmgmt'], ['Stock Movements', 'stock/moves', 'stockmgmt'], ['Update / Waste', 'waste', 'waste'], ['Production Line', 'production/orders', 'production'], ['Disassembling', 'disassembly', 'disassembly']] },
-  { label: 'Sales & POS', icon: 'pos', children: [['Point of Sale', 'pos', 'pos'], ['Rooms', 'rooms', 'rooms'], ['Salesmen', 'salesman', 'salesman'], ['Cash Box', 'cashbox', 'cashbox']] },
+  { label: 'Stock Management', icon: 'truck', children: [['Stock Inventory', 'inventory', 'inventory'], ['Transfers', 'stock/transfers', 'stockmgmt'], ['Opening Stock', 'stock/opening', 'stockmgmt'], ['Stock Movements', 'stock/moves', 'stockmgmt'], ['Update / Waste', 'waste', 'waste']] },
+  { label: 'Sales & POS', icon: 'pos', children: [['Point of Sale', 'pos', 'pos'], ['Salesmen', 'salesman', 'salesman'], ['Cash Box', 'cashbox', 'cashbox']] },
   { label: 'Accounts', icon: 'users', children: [['Chart of Accounts', 'accounts/chart', 'accounts'], ['Customers', 'accounts/customers', 'accounts'], ['Suppliers', 'accounts/suppliers', 'accounts']] },
   { label: 'Invoices', icon: 'file', children: [['Sales', 'invoices/sale', 'invoices'], ['Purchases', 'invoices/purchase', 'invoices'], ['Sales Returns', 'invoices/sale_return', 'invoices'], ['Purchase Returns', 'invoices/purchase_return', 'invoices']] },
   { label: 'Vouchers', icon: 'receipt', children: [['Receipts', 'vouchers/receipt', 'vouchers'], ['Payments', 'vouchers/payment', 'vouchers'], ['Journal', 'vouchers/journal', 'vouchers']] },
@@ -52,10 +49,10 @@ const QUICK = [
 /* route name -> [permission, view function name] */
 const ROUTES = {
   dashboard: [null, 'dashboard'], about: [null, 'about'],
-  rooms: ['rooms', 'rooms'], pos: ['pos', 'pos'], converter: ['converter', 'converter'], categories: ['categories', 'categories'], currencies: ['currencies', 'currencies'],
+  pos: ['pos', 'pos'], converter: ['converter', 'converter'], categories: ['categories', 'categories'], currencies: ['currencies', 'currencies'],
   vouchers: ['vouchers', 'vouchers'], voucher: ['vouchers', 'voucherView'], items: ['items', 'items'], item: ['items', 'item'], inventory: ['inventory', 'inventory'],
   accounts: ['accounts', 'accounts'], invoices: ['invoices', 'invoices'], invoice: ['invoices', 'invoice'], cashbox: ['cashbox', 'cashbox'],
-  salesman: ['salesman', 'salesman'], stock: ['stockmgmt', 'stock'], production: ['production', 'production'], disassembly: ['disassembly', 'disassembly'],
+  salesman: ['salesman', 'salesman'], stock: ['stockmgmt', 'stock'],
   'trial-balance': ['trialbalance', 'trialBalance'], statement: ['statement', 'statement'], journal: ['statement', 'journalView'], warehouses: ['warehouses', 'warehouses'],
   users: ['users', 'users'], settings: ['settings', 'settings'], waste: ['waste', 'waste'], backup: ['backup', 'backup'], reports: ['reports', 'reports'], report: ['reports', 'report'], tasks: ['tasks', 'tasks'],
 };
@@ -86,7 +83,7 @@ const App = {
       <section class="login-promo">
         <div class="promo-top"><div class="promo-brand">${UI.logoSvg(34)}<span>Devma<br><small>Computers &amp; Software</small></span></div></div>
         <h2>ORGANIZE YOUR<br><b>BUSINESS</b><br>WITH US</h2>
-        <p class="promo-lead">One system for sales, stock, rooms, production and accounting — built for growing businesses.</p>
+        <p class="promo-lead">One system for sales, stock and accounting — built for growing businesses.</p>
         <div class="promo-art">${this.promoArt()}</div>
         <ul class="promo-list"><li>${UI.icon('check')}Point of sale &amp; invoices</li><li>${UI.icon('check')}Live stock across warehouses</li><li>${UI.icon('check')}Double-entry accounting &amp; reports</li><li>${UI.icon('check')}Multi-currency with converter</li></ul>
         <div class="promo-contact"><b>GET IN TOUCH</b><span>info@devma.com · +961 1 234 567</span></div>
@@ -101,7 +98,7 @@ const App = {
           <div class="login-row"><label class="check"><input type="checkbox" name="remember"> Remember me</label><a href="#" id="forgot">Forgot password?</a></div>
           <div class="login-err" id="login-err"></div>
           <button class="btn btn-primary btn-block" type="submit">${UI.icon('logout')}<span>Login</span></button>
-          <div class="login-hint">Demo users: <code>admin / admin</code> · <code>cashier / 1234</code> · <code>accountant / 1234</code></div>
+          <div class="login-hint">First login: <code>admin / admin</code> — change the password after signing in.</div>
         </form>
         <div class="login-foot">© ${new Date().getFullYear()} Devma Accounting System v1.0</div>
       </section>
@@ -268,7 +265,7 @@ const App = {
   },
   /* open the source document of a ledger / stock entry */
   openRef(type, id, jeId) {
-    const map = { invoice: () => this.go('invoice/' + id), voucher: () => this.go('voucher/' + id), adjustment: () => V.showAdjustment(id), transfer: () => V.showTransfer(id), production: () => V.showProduction(id), disassembly: () => V.showDisassembly(id), shift: () => V.showShift(id) };
+    const map = { invoice: () => this.go('invoice/' + id), voucher: () => this.go('voucher/' + id), adjustment: () => V.showAdjustment(id), transfer: () => V.showTransfer(id), shift: () => V.showShift(id) };
     if (map[type]) return map[type]();
     if (jeId) return this.go('journal/' + jeId);
   },
